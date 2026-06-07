@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BT.656 数字视频流异常数据检测工具</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-hover: #30363d;
+  --border-color: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-red: #f85149;
+  --accent-orange: #d29922;
+  --accent-purple: #bc8cff;
+  --accent-cyan: #39c5cf;
+  --hex-font: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+#app { max-width: 1600px; margin: 0 auto; padding: 20px; }
+
+/* Header */
+.app-header {
+  text-align: center;
+  padding: 24px 0 32px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 28px;
+}
+.app-header h1 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.app-header p {
+  color: var(--text-secondary);
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+/* Layout */
+.main-grid {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 20px;
+}
+.panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.panel-header {
+  padding: 14px 18px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-secondary);
+}
+.panel-body { padding: 16px; }
+
+/* Input Section */
+.upload-zone {
+  border: 2px dashed var(--border-color);
+  border-radius: 8px;
+  padding: 28px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 16px;
+}
+.upload-zone:hover, .upload-zone.dragover {
+  border-color: var(--accent-blue);
+  background: rgba(88,166,255,0.05);
+}
+.upload-zone input[type="file"] { display: none; }
+.upload-icon {
+  font-size: 36px;
+  margin-bottom: 10px;
+  opacity: 0.6;
+}
+.upload-zone p { color: var(--text-secondary); font-size: 13px; }
+.file-info {
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--hex-font);
+  font-size: 12px;
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.file-info .fname { color: var(--accent-blue); }
+.file-info .fsize { color: var(--text-muted); }
+.btn-remove {
+  background: none;
+  border: none;
+  color: var(--accent-red);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+}
+
+textarea.hex-input {
+  width: 100%;
+  height: 140px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--hex-font);
+  font-size: 12px;
+  padding: 10px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+}
+textarea.hex-input:focus { border-color: var(--accent-blue); }
+
+.config-group { margin-bottom: 14px; }
+.config-group label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+select, input[type="number"] {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+select:focus, input[type="number"]:focus { border-color: var(--accent-blue); }
+
+.btn-analyze {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, #238636, #2ea043);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  letter-spacing: 0.3px;
+}
+.btn-analyze:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(46,160,67,0.3); }
+.btn-analyze:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Stats Panel */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.stat-card {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+}
+.stat-card .stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  font-family: var(--hex-font);
+}
+.stat-card .stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.stat-card.y-val .stat-value { color: var(--accent-green); }
+.stat-card.cbcr-val .stat-value { color: var(--accent-cyan); }
+.stat-card.err-val .stat-value { color: var(--accent-red); }
+
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.mini-stat {
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 10px 8px;
+  text-align: center;
+}
+.mini-stat .ms-val {
+  font-size: 16px;
+  font-weight: 600;
+  font-family: var(--hex-font);
+}
+.mini-stat .ms-lbl {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Tabs */
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-color); margin-bottom: 0; }
+.tab-btn {
+  padding: 10px 20px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  font-weight: 500;
+}
+.tab-btn:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.tab-btn.active {
+  color: var(--accent-blue);
+  border-bottom-color: var(--accent-blue);
+}
+
+/* Table */
+.table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--hex-font);
+}
+table.data-table thead { position: sticky; top: 0; z-index: 1; }
+table.data-table th {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+table.data-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+table.data-table tr:hover td { background: rgba(88,166,255,0.04); }
+.err-type-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.err-out-of-range { background: rgba(255,140,0,0.15); color: #ffa500; }
+.err-staircase { background: rgba(210,153,34,0.15); color: var(--accent-orange); }
+.ch-y { color: var(--accent-green); font-weight: 600; }
+.ch-cb { color: var(--accent-cyan); font-weight: 600; }
+.ch-cr { color: var(--accent-purple); font-weight: 600; }
+
+/* Hex Editor View */
+.hex-editor {
+  font-family: var(--hex-font);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow: auto;
+  max-height: 520px;
+  background: var(--bg-primary);
+  border-radius: 6px;
+  padding: 12px;
+}
+.hex-line {
+  display: flex;
+  gap: 16px;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.hex-line:hover { background: var(--bg-hover); }
+.hex-offset {
+  color: var(--text-muted);
+  min-width: 80px;
+  user-select: all;
+}
+.hex-bytes { display: flex; gap: 4px; flex-wrap: wrap; }
+.hex-byte {
+  padding: 1px 5px;
+  border-radius: 3px;
+  min-width: 34px;
+  text-align: center;
+  user-select: all;
+  transition: background 0.1s;
+}
+.hex-byte.normal { color: var(--text-secondary); }
+.hex-byte.error {
+  background: var(--accent-red);
+  color: #fff;
+  font-weight: 700;
+}
+.hex-byte.sav-eav {
+  background: rgba(88,166,255,0.15);
+  color: var(--accent-blue);
+  font-weight: 600;
+}
+.hex-byte.active-video {
+  color: var(--accent-green);
+}
+
+/* Staircase Chart */
+.stair-section { margin-top: 20px; }
+.stair-chart {
+  display: flex;
+  align-items: flex-end;
+  height: 200px;
+  gap: 3px;
+  padding: 10px;
+  background: var(--bg-primary);
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  margin-top: 10px;
+  position: relative;
+}
+.stair-bar {
+  flex: 1;
+  background: linear-gradient(to top, var(--accent-blue), var(--accent-cyan));
+  border-radius: 3px 3px 0 0;
+  min-width: 20px;
+  position: relative;
+  transition: all 0.3s;
+  cursor: pointer;
+}
+.stair-bar:hover { opacity: 0.85; }
+.stair-bar .bar-label {
+  position: absolute;
+  bottom: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-family: -apple-system, sans-serif;
+}
+.stair-bar .bar-value {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--accent-blue);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.stair-bar.error-bar {
+  background: linear-gradient(to top, var(--accent-red), #ff6b6b);
+}
+.stair-bar.error-bar .bar-value { color: var(--accent-red); }
+.ref-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed rgba(248,81,73,0.5);
+  z-index: 1;
+}
+.ref-line::after {
+  content: attr(data-label);
+  position: absolute;
+  right: 4px;
+  top: -14px;
+  font-size: 9px;
+  color: var(--accent-red);
+}
+
+/* Loading */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid var(--bg-tertiary);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+.empty-state .icon { font-size: 48px; opacity: 0.3; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+
+/* Filter bar */
+.filter-bar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  align-items: center;
+}
+.filter-bar select {
+  width: auto;
+  min-width: 150px;
+}
+.filter-bar .result-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Responsive */
+@media (max-width: 1100px) {
+  .main-grid { grid-template-columns: 1fr; }
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="app-header">
+    <h1>BT.656 数字视频流异常数据检测工具</h1>
+    <p>基于 ITU-R BT.656 4:2:2 规范 · 10-bit 数据解析 · SMPTE 彩条阶梯校验</p>
+  </div>
+
+  <div v-if="analyzing" class="loading-overlay"><div class="spinner"></div></div>
+
+  <div class="main-grid">
+    <!-- Left Panel: Input & Config -->
+    <div class="left-panel">
+      <!-- File Upload -->
+      <div class="panel" style="margin-bottom: 16px;">
+        <div class="panel-header">📁 数据输入</div>
+        <div class="panel-body">
+          <div
+            class="upload-zone"
+            :class="{ dragover: isDragging }"
+            @dragover.prevent="isDragging = true"
+            @dragleave="isDragging = false"
+            @drop.prevent="handleDrop"
+            @click="$refs.fileInput.click()"
+          >
+            <input ref="fileInput" type="file" accept=".bin,.raw,.dat,.hex,.txt" @change="handleFileSelect">
+            <div class="upload-icon">📂</div>
+            <p>点击或拖拽上传 .bin / .raw / .hex 文件</p>
+          </div>
+          <div v-if="fileName" class="file-info">
+            <span class="fname">{{ fileName }}</span>
+            <span class="fsize">{{ formatSize(fileSize) }}</span>
+            <button class="btn-remove" @click="clearFile" title="移除文件">✕</button>
+          </div>
+
+          <label style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;display:block;font-weight:500;">
+            或粘贴十六进制数据 (Hex Dump)
+          </label>
+          <textarea
+            v-model="hexText"
+            class="hex-input"
+            placeholder="示例: FF 00 00 XX FF 00 00 XX ...&#10;或连续字符串: FF0000XXFF0000XX..."
+            spellcheck="false"
+          ></textarea>
+        </div>
+      </div>
+
+      <!-- Config -->
+      <div class="panel" style="margin-bottom: 16px;">
+        <div class="panel-header">⚙️ 解析配置</div>
+        <div class="panel-body">
+          <div class="config-group">
+            <label>视频分辨率 / 行宽 (Y样点数)</label>
+            <select v-model.number="config.width">
+              <option :value="1920">1920 (1080p/i)</option>
+              <option :value="1440">1440 (1080i 3/4 HD)</option>
+              <option :value="1280">1280 (720p)</option>
+              <option :value="720">720 (SD 480i/576i)</option>
+              <option :value="0">自动检测</option>
+            </select>
+          </div>
+          <div class="config-group">
+            <label>SMPTE 阶梯误差容限 (LSB)</label>
+            <input type="number" v-model.number="config.tolerance" min="1" max="20">
+          </div>
+          <div class="config-group">
+            <label>起始序号偏移 (Initial Offset)</label>
+            <input type="number" v-model.number="config.initialOffset" min="0" placeholder="默认=0, 例: 1437">
+          </div>
+          <div class="config-group">
+            <label>数据打包模式</label>
+            <select v-model="config.packMode">
+              <option value="packed_4to5">Packed 4:2:2 (4样本→5字节) — 标准 BT.656</option>
+              <option value="raw_10bit">Raw 10-bit (每样本2字节，低6位补零)</option>
+            </select>
+          </div>
+          <button class="btn-analyze" @click="startAnalysis" :disabled="!hasData || analyzing">
+            {{ analyzing ? '分析中...' : '🔍 开始分析' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Reference -->
+      <div class="panel">
+        <div class="panel-header">📋 合法范围速查</div>
+        <div class="panel-body" style="font-size:12px;line-height:2;">
+          <div><strong style="color:var(--accent-green)">Y (亮度):</strong> 040h ~ 3BFh</div>
+          <div><strong style="color:var(--accent-cyan)">Cb/Cr (色度):</strong> 040h ~ 3C0h</div>
+          <div style="color:var(--text-muted);margin-top:8px;padding-top:8px;border-top:1px solid var(--border-color);">
+            SAV/EAV: <span style="color:var(--accent-blue)">000h</span> / <span style="color:var(--accent-blue)">3FFh</span> (定时基准信号，合法)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel: Results -->
+    <div class="right-panel">
+      <template v-if="analysisDone">
+        <!-- Stats Overview -->
+        <div class="panel" style="margin-bottom: 16px;">
+          <div class="panel-header">📊 数据总览</div>
+          <div class="panel-body">
+            <div class="stats-grid">
+              <div class="stat-card y-val">
+                <div class="stat-value">{{ stats.totalY.toLocaleString() }}</div>
+                <div class="stat-label">Y 样点总数</div>
+              </div>
+              <div class="stat-card cbcr-val">
+                <div class="stat-value">{{ stats.totalCbCr.toLocaleString() }}</div>
+                <div class="stat-label">Cb/Cr 样点数</div>
+              </div>
+              <div class="stat-card err-val">
+                <div class="stat-value">{{ stats.totalErrors }}</div>
+                <div class="stat-label">异常数据数</div>
+              </div>
+            </div>
+            <div class="stats-row">
+              <div class="mini-stat">
+                <div class="ms-val" style="color:var(--accent-blue)">{{ stats.totalSamples.toLocaleString() }}</div>
+                <div class="ms-lbl">总采样点</div>
+              </div>
+              <div class="mini-stat">
+                <div class="ms-val" style="color:var(--accent-orange)">{{ stats.linesDetected }}</div>
+                <div class="ms-lbl">检测行数</div>
+              </div>
+              <div class="mini-stat">
+                <div class="ms-val" style="color:var(--accent-red)">{{ stats.rangeErrors }}</div>
+                <div class="ms-lbl">越界错误</div>
+              </div>
+              <div class="mini-stat">
+                <div class="ms-val" style="color:var(--accent-orange)">{{ stats.staircaseErrors }}</div>
+                <div class="ms-lbl">阶梯错误</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px;">
+              <div style="flex:1;background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+                <div style="font-size:18px;font-weight:700;font-family:var(--hex-font);" :style="{color: errorRateColor}">{{ errorRatePercent }}%</div>
+                <div style="font-size:10px;color:var(--text-muted);">异常比例</div>
+              </div>
+              <div style="flex:1;background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+                <div style="font-size:18px;font-weight:700;font-family:var(--hex-font);color:var(--accent-green)">{{ stats.validSamples.toLocaleString() }}</div>
+                <div style="font-size:10px;color:var(--text-muted);">正常样点</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tabs: Table / Hex Editor / Staircase -->
+        <div class="panel">
+          <div class="tabs">
+            <button class="tab-btn" :class="{active: activeTab==='table'}" @click="activeTab='table'">📋 异常详情表</button>
+            <button class="tab-btn" :class="{active: activeTab==='hex'}" @click="activeTab='hex'">🔢 Hex 视图</button>
+            <button class="tab-btn" :class="{active: activeTab==='stair'}" @click="activeTab='stair'">📈 阶梯分析图</button>
+          </div>
+          <div class="panel-body" style="padding:0;">
+
+            <!-- Table Tab -->
+            <div v-show="activeTab === 'table'">
+              <div class="filter-bar" style="padding:12px 16px 0;">
+                <select v-model="filterType">
+                  <option value="all">全部类型</option>
+                  <option value="out_of_range">仅越界</option>
+                  <option value="staircase">仅阶梯错误</option>
+                </select>
+                <select v-model="filterChannel">
+                  <option value="all">全部通道</option>
+                  <option value="Y">Y</option>
+                  <option value="Cb">Cb</option>
+                  <option value="Cr">Cr</option>
+                </select>
+                <span class="result-count">显示 {{ filteredErrors.length }} / {{ errors.length }} 条</span>
+              </div>
+              <div class="table-wrap">
+                <table v-if="filteredErrors.length" class="data-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>文件偏移</th>
+                      <th>样点序号</th>
+                      <th>通道</th>
+                      <th>数值 (Hex)</th>
+                      <th>数值 (Dec)</th>
+                      <th>行号</th>
+                      <th>错误类型</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(err, idx) in paginatedErrors" :key="idx">
+                      <td>{{ err.index + 1 }}</td>
+                      <td>{{ err.byteOffset.toString(16).toUpperCase().padStart(6,'0') }}h</td>
+                      <td>{{ err.sampleIndex }}</td>
+                      <td><span :class="'ch-' + err.channel.toLowerCase()">{{ err.channel }}</span></td>
+                      <td style="font-weight:600;" :style="{color: err.type==='out_of_range'?'var(--accent-red)':'var(--accent-orange)'}">{{ err.hexValue }}</td>
+                      <td>{{ err.decValue }}</td>
+                      <td>{{ err.lineNumber }}</td>
+                      <td><span :class="'err-type-badge err-' + err.type">{{ err.typeLabel }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-else class="empty-state">
+                  <div class="icon">✅</div>
+                  <p>{{ filterType!=='all'||filterChannel!=='all' ? '当前筛选条件下无结果' : '未检测到异常数据' }}</p>
+                </div>
+              </div>
+              <div v-if="totalPages > 1" style="padding:12px;display:flex;justify-content:center;gap:8px;">
+                <button
+                  v-for="p in totalPages" :key="p"
+                  @click="currentPage = p"
+                  style="padding:4px 10px;border:1px solid var(--border-color);background:var(--bg-tertiary);color:var(--text-primary);cursor:pointer;border-radius:4px;font-size:12px;"
+                  :style="{background: currentPage===p ? 'var(--accent-blue)' : '', color: currentPage===p ? '#fff' : ''}"
+                >{{ p }}</button>
+              </div>
+            </div>
+
+            <!-- Hex Editor Tab -->
+            <div v-show="activeTab === 'hex'" style="padding:16px;">
+              <div class="filter-bar" style="margin-bottom:12px;">
+                <span style="font-size:12px;color:var(--text-muted);">显示前 {{ hexDisplayBytes }} 字节</span>
+                <input type="number" v-model.number="hexDisplayBytes" min="256" max="65536" step="256" style="width:100px;">
+              </div>
+              <div class="hex-editor">
+                <div v-for="(line, li) in hexLines" :key="li" class="hex-line">
+                  <span class="hex-offset">{{ line.offsetStr }}</span>
+                  <div class="hex-bytes">
+                    <span
+                      v-for="(byte, bi) in line.bytes" :key="bi"
+                      class="hex-byte"
+                      :class="byteClass(byte)"
+                    >{{ byte.hex }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Staircase Tab -->
+            <div v-show="activeTab === 'stair'" style="padding:16px;">
+              <div class="stair-section">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                  <span style="font-size:13px;font-weight:600;">SMPTE 彩条亮度(Y)阶梯分布</span>
+                  <select v-model.number="selectedStairLine" style="width:auto;min-width:140px;" v-if="stairResults.length">
+                    <option v-for="(sr, i) in stairResults" :key="i" :value="i">第 {{ sr.lineNumber }} 行</option>
+                  </select>
+                </div>
+                <div v-if="currentStair" class="stair-chart">
+                  <div
+                    v-for="(bar, bi) in currentStair.bars" :key="bi"
+                    class="stair-bar"
+                    :class="{ 'error-bar': bar.isError }"
+                    :style="{ height: bar.heightPx + 'px' }"
+                  >
+                    <span class="bar-label">{{ bar.name }}</span>
+                    <span class="bar-value">{{ bar.meanHex }}</span>
+                  </div>
+                </div>
+                <div v-else class="empty-state" style="padding:30px;">
+                  <p>暂无阶梯数据（可能未检测到有效视频行）</p>
+                </div>
+                <!-- Stair detail table -->
+                <div v-if="currentStair" style="margin-top:40px;">
+                  <table class="data-table" style="font-size:11px;">
+                    <thead>
+                      <tr>
+                        <th>色块</th>
+                        <th>参考值 (10-bit)</th>
+                        <th>实测均值</th>
+                        <th>偏差</th>
+                        <th>标准差</th>
+                        <th>状态</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(bar, bi) in currentStair.bars" :key="bi">
+                        <td><strong>{{ bar.name }}</strong></td>
+                        <td style="font-family:var(--hex-font);color:var(--text-secondary);">{{ bar.refHex }}</td>
+                        <td style="font-family:var(--hex-font);font-weight:600;">{{ bar.meanHex }}</td>
+                        <td style="font-family:var(--hex-font);" :style="{color: Math.abs(bar.deviation)<=config.tolerance ? 'var(--accent-green)' : 'var(--accent-red)'}">
+                          {{ bar.deviation >= 0 ? '+' : '' }}{{ bar.deviation }} LSB
+                        </td>
+                        <td style="font-family:var(--hex-font);">{{ bar.stdDev.toFixed(1) }}</td>
+                        <td>
+                          <span
+                            class="err-type-badge"
+                            :class="bar.isError ? 'err-staircase' : ''"
+                            style="background:rgba(63,185,80,0.15);color:var(--accent-green);"
+                          >{{ bar.isError ? '❌ 异常' : '✅ 正常' }}</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </template>
+
+      <!-- Empty state before analysis -->
+      <div v-else class="panel">
+        <div class="panel-body">
+          <div class="empty-state">
+            <div class="icon">🔬</div>
+            <p>请上传文件或粘贴十六进制数据后点击「开始分析」</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, watch, nextTick } = Vue
+
+createApp({
+  setup() {
+    // --- Input state ---
+    const fileInput = ref(null)
+    const fileName = ref('')
+    const fileSize = ref(0)
+    const rawFileData = ref(null)
+    const hexText = ref('')
+    const isDragging = ref(false)
+
+    const config = reactive({
+      width: 1920,
+      tolerance: 5,
+      packMode: 'packed_4to5',
+      initialOffset: 0
+    })
+
+    const analyzing = ref(false)
+    const analysisDone = ref(false)
+    const activeTab = ref('table')
+    const currentPage = ref(1)
+    const pageSize = 200
+
+    // Filter
+    const filterType = ref('all')
+    const filterChannel = ref('all')
+    const hexDisplayBytes = ref(2048)
+    const selectedStairLine = ref(0)
+
+    // Results
+    const errors = ref([])
+    const samples = ref([])
+    const stats = reactive({
+      totalSamples: 0, totalY: 0, totalCbCr: 0,
+      totalErrors: 0, rangeErrors: 0, staircaseErrors: 0,
+      validSamples: 0, linesDetected: 0
+    })
+    const stairResults = ref([])
+
+    // --- Computed ---
+    const hasData = computed(() => rawFileData.value || hexText.value.trim().length > 0)
+
+    const errorRatePercent = computed(() => {
+      if (stats.totalSamples === 0) return '0.00'
+      return ((stats.totalErrors / stats.totalSamples) * 100).toFixed(3)
+    })
+
+    const errorRateColor = computed(() => {
+      const rate = parseFloat(errorRatePercent.value)
+      if (rate === 0) return 'var(--accent-green)'
+      if (rate < 1) return 'var(--accent-orange)'
+      return 'var(--accent-red)'
+    })
+
+    const filteredErrors = computed(() => {
+      let list = errors.value
+      if (filterType.value !== 'all') {
+        const t = filterType.value
+        list = list.filter(e => e.type === t)
+      }
+      if (filterChannel.value !== 'all') {
+        const ch = filterChannel.value
+        list = list.filter(e => e.channel === ch)
+      }
+      return list
+    })
+
+    const totalPages = computed(() => Math.max(1, Math.ceil(filteredErrors.value.length / pageSize)))
+
+    const paginatedErrors = computed(() => {
+      const start = (currentPage.value - 1) * pageSize
+      return filteredErrors.value.slice(start, start + pageSize)
+    })
+
+    watch([filterType, filterChannel], () => { currentPage.value = 1 })
+
+    const hexLines = computed(() => {
+      if (!rawFileData.value) return []
+      const bytesPerLine = 16
+      const total = Math.min(hexDisplayBytes.value, rawFileData.value.length)
+      const lines = []
+      for (let i = 0; i < total; i += bytesPerLine) {
+        const offset = i
+        const rowBytes = []
+        for (let j = 0; j < bytesPerLine && (i + j) < total; j++) {
+          const bval = rawFileData.value[i + j]
+          const byteIdx = i + j
+          const hasErr = errors.value.some(e =>
+            e.byteOffset <= byteIdx && byteIdx < e.byteOffset + (config.packMode === 'packed_4to5' ? 5 : 2)
+          )
+          rowBytes.push({
+            hex: bval.toString(16).toUpperCase().padStart(2, '0'),
+            val: bval,
+            offset: byteIdx,
+            hasError: hasErr
+          })
+        }
+        lines.push({
+          offsetStr: offset.toString(16).toUpperCase().padStart(8, '0'),
+          bytes: rowBytes
+        })
+      }
+      return lines
+    })
+
+    const currentStair = computed(() => {
+      if (!stairResults.value.length) return null
+      return stairResults.value[selectedStairLine.value] || stairResults.value[0]
+    })
+
+    // --- Methods ---
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B'
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'
+      return (bytes / 1048576).toFixed(2) + ' MB'
+    }
+
+    function handleDrop(e) {
+      isDragging.value = false
+      const f = e.dataTransfer.files[0]
+      if (f) loadFile(f)
+    }
+
+    function handleFileSelect(e) {
+      const f = e.target.files[0]
+      if (f) loadFile(f)
+    }
+
+    function loadFile(file) {
+      fileName.value = file.name
+      fileSize.value = file.size
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const data = new Uint8Array(ev.target.result)
+        rawFileData.value = data
+        // Also populate hex text
+        let hexStr = ''
+        for (let i = 0; i < Math.min(data.length, 512); i++) {
+          hexStr += data[i].toString(16).toUpperCase().padStart(2, '0') + ' '
+        }
+        if (data.length > 512) hexStr += `... (${data.length} 字节)`
+        hexText.value = hexStr.trim()
+      }
+      reader.readAsArrayBuffer(file)
+    }
+
+    function clearFile() {
+      fileName.value = ''
+      fileSize.value = 0
+      rawFileData.value = null
+      if (fileInput.value) fileInput.value.value = ''
+    }
+
+    function parseHexText(text) {
+      text = text.replace(/[^0-9A-Fa-f]/g, '')
+      const bytes = new Uint8Array(text.length / 2)
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(text.substr(i * 2, 2), 16)
+      }
+      return bytes
+    }
+
+    // ========== CORE ENGINE ==========
+
+    // SAV/EAV control word XYZ values
+    const SAV_EAV_WORDS = new Set([
+      0x200, 0x20D, 0x27C, 0x279,  // SAV variants
+      0x1B4, 0x1B1, 0x168, 0x165   // EAV variants
+    ])
+
+    // SMPTE 75% Color Bar reference levels (10-bit)
+    const SMPTE_REF_Y = [0x3AC, 0x340, 0x2DC, 0x270, 0x21C, 0x1B0, 0x154, 0x040] // White->Black
+    const SMPTE_REF_NAMES = ['白','黄','青','绿','品红','红','蓝','黑']
+
+    // Legal ranges
+    const Y_MIN = 0x040, Y_MAX = 0x3BF
+    const C_MIN = 0x040, C_MAX = 0x3C0
+
+    function unpack10bitPacked(rawBytes) {
+      const samples = []
+      for (let i = 0; i + 4 < rawBytes.length; i += 5) {
+        const b0 = rawBytes[i], b1 = rawBytes[i+1], b2 = rawBytes[i+2]
+        const b3 = rawBytes[i+3], b4 = rawBytes[i+4]
+        samples.push(
+          (b0 << 2) | (b4 >> 6),           // Cb0
+          (b1 << 2) | ((b4 >> 4) & 0x03),   // Y0
+          (b2 << 2) | ((b4 >> 2) & 0x03),   // Cr0
+          (b3 << 2) | (b4 & 0x03)           // Y1
+        )
+      }
+      return samples
+    }
+
+    function unpack10bitRaw(rawBytes) {
+      const samples = []
+      for (let i = 0; i + 1 < rawBytes.length; i += 2) {
+        samples.push((rawBytes[i] << 2) | (rawBytes[i+1] >> 6))
+      }
+      return samples
+    }
+
+    function detectSAV_EAV(samples) {
+      const markers = []
+      for (let i = 0; i + 3 < samples.length; i++) {
+        if (samples[i] === 0x3FF && samples[i+1] === 0x000 &&
+            samples[i+2] === 0x000 && SAV_EAV_WORDS.has(samples[i+3])) {
+          markers.push({ index: i, type: samples[i+3] & 0x01 ? 'SAV' : 'EAV', xyz: samples[i+3] })
+        }
+      }
+      return markers
+    }
+
+    function extractActiveVideo(samples, markers) {
+      const activeRegions = []
+      for (let i = 0; i < markers.length; i++) {
+        if (markers[i].type === 'SAV') {
+          const savIdx = markers[i].index
+          // Find next EAV
+          let eavIdx = -1
+          for (let j = i + 1; j < markers.length; j++) {
+            if (markers[j].type === 'EAV') {
+              eavIdx = markers[j].index
+              break
+            }
+          }
+          if (eavIdx > savIdx + 4) {
+            activeRegions.push({
+              startSample: savIdx + 4,
+              endSample: eavIdx,
+              lineNumber: activeRegions.length + 1
+            })
+          }
+        }
+      }
+      return activeRegions
+    }
+
+    function checkRange(val, channel) {
+      if (val === 0x000 || val === 0x3FF) {
+        return { outOfRange: false }
+      }
+      if (channel === 'Y') {
+        if (val < Y_MIN || val > Y_MAX) return { outOfRange: true, reason: '越界' }
+      } else {
+        if (val < C_MIN || val > C_MAX) return { outOfRange: true, reason: '越界' }
+      }
+      return { outOfRange: false }
+    }
+
+    function analyzeStaircase(yValues, tolerance, lineWidth) {
+      const numSteps = 8
+      const stepSize = Math.floor(yValues.length / numSteps)
+      if (stepSize < 4) return null
+
+      const bars = []
+      for (let s = 0; s < numSteps; s++) {
+        const start = s * stepSize
+        const end = s === numSteps - 1 ? yValues.length : (s + 1) * stepSize
+        const segment = yValues.slice(start, end)
+        const mean = segment.reduce((a, b) => a + b, 0) / segment.length
+        const variance = segment.reduce((acc, v) => acc + (v - mean) ** 2, 0) / segment.length
+        const stdDev = Math.sqrt(variance)
+        const refVal = SMPTE_REF_Y[s]
+        const deviation = Math.round(mean - refVal)
+        const isError = Math.abs(deviation) > tolerance || stdDev > tolerance * 2
+
+        bars.push({
+          name: SMPTE_REF_NAMES[s],
+          refValue: refVal,
+          refHex: '0x' + refVal.toString(16).toUpperCase(),
+          meanValue: Math.round(mean),
+          meanHex: '0x' + Math.round(mean).toString(16).toUpperCase(),
+          deviation: deviation,
+          stdDev: stdDev,
+          isError: isError,
+          heightPx: Math.max(10, Math.round((mean / 1024) * 180))
+        })
+      }
+
+      // Also check individual point anomalies within each step
+      const pointErrors = []
+      for (let s = 0; s < numSteps; s++) {
+        const start = s * stepSize
+        const end = s === numSteps - 1 ? yValues.length : (s + 1) * stepSize
+        const refVal = SMPTE_REF_Y[s]
+        for (let k = start; k < end; k++) {
+          if (Math.abs(yValues[k] - refVal) > tolerance * 3) {
+            pointErrors.push({ indexInLine: k, expected: refVal, got: yValues[k] })
+          }
+        }
+      }
+
+      return { bars, pointErrors, hasAnyError: bars.some(b => b.isError) || pointErrors.length > 0 }
+    }
+
+    async function startAnalysis() {
+      analyzing.value = true
+      analysisDone.value = false
+      errors.value = []
+      samples.value = []
+      stairResults.value = []
+
+      await nextTick()
+      await new Promise(r => setTimeout(r, 50))
+
+      try {
+        // Get raw bytes
+        let rawData
+        if (rawFileData.value) {
+          rawData = rawFileData.value
+        } else if (hexText.value.trim()) {
+          rawData = parseHexText(hexText.value)
+        } else {
+          throw new Error('无输入数据')
+        }
+
+        // Unpack 10-bit samples
+        let allSamples
+        if (config.packMode === 'packed_4to5') {
+          allSamples = unpack10bitPacked(rawData)
+        } else {
+          allSamples = unpack10bitRaw(rawData)
+        }
+
+        if (allSamples.length === 0) throw new Error('解包后无有效样本')
+
+        // Detect SAV/EAV
+        const markers = detectSAV_EAV(allSamples)
+        console.log(`[BT.656] 检测到 ${markers.length} 个 SAV/EAV 同步头`)
+
+        // Extract active video regions
+        const regions = extractActiveVideo(allSamples, markers)
+        console.log(`[BT.656] 提取到 ${regions.length} 个有效视频区域`)
+
+        // Determine line width
+        let lineWidth = config.width
+        if (lineWidth === 0 && regions.length > 0) {
+          // Auto-detect from first region
+          const firstLen = regions[0].endSample - regions[0].startSample
+          lineWidth = Math.floor(firstLen / 2) // Each pixel has Y + (Cb or Cr interleaved)
+        }
+        if (lineWidth === 0) lineWidth = 1920
+
+        // Process each region
+        let totalY = 0, totalCbCr = 0, totalSamp = 0
+        let rangeErrCount = 0, stairErrCount = 0
+
+        for (const region of regions) {
+          const regionSamples = allSamples.slice(region.startSample, region.endSample)
+          // Parse as Cb, Y, Cr, Y sequence
+          const lineY = [], lineCb = [], lineCr = []
+          const localErrors = []
+
+          for (let i = 0; i + 3 < regionSamples.length; i += 4) {
+            const cb = regionSamples[i]
+            const y0 = regionSamples[i + 1]
+            const cr = regionSamples[i + 2]
+            const y1 = regionSamples[i + 3]
+
+            const baseByteOffset = region.startSample * (config.packMode === 'packed_4to5' ? 1.25 : 2)
+            const sampleBaseIndex = totalSamp
+
+            // Check Cb
+            totalCbCr++
+            const cbCheck = checkRange(cb, 'Cb')
+            if (cbCheck.outOfRange) {
+              rangeErrCount++
+              localErrors.push({
+                byteOffset: Math.round(baseByteOffset + i * 1.25),
+                sampleIndex: sampleBaseIndex,
+                channel: 'Cb',
+                decValue: cb,
+                hexValue: '0x' + cb.toString(16).toUpperCase().padStart(3, '0'),
+                type: 'out_of_range',
+                typeLabel: '越界',
+                lineNumber: region.lineNumber,
+                index: errors.value.length + localErrors.length
+              })
+            }
+
+            // Check Y0
+            totalY++; totalSamp++
+            const y0Check = checkRange(y0, 'Y')
+            if (y0Check.outOfRange) {
+              rangeErrCount++
+              localErrors.push({
+                byteOffset: Math.round(baseByteOffset + (i + 1) * 1.25),
+                sampleIndex: sampleBaseIndex + 1,
+                channel: 'Y',
+                decValue: y0,
+                hexValue: '0x' + y0.toString(16).toUpperCase().padStart(3, '0'),
+                type: 'out_of_range',
+                typeLabel: '越界',
+                lineNumber: region.lineNumber,
+                index: errors.value.length + localErrors.length
+              })
+            }
+            lineY.push(y0)
+
+            // Check Cr
+            totalCbCr++
+            const crCheck = checkRange(cr, 'Cr')
+            if (crCheck.outOfRange) {
+              rangeErrCount++
+              localErrors.push({
+                byteOffset: Math.round(baseByteOffset + (i + 2) * 1.25),
+                sampleIndex: sampleBaseIndex + 2,
+                channel: 'Cr',
+                decValue: cr,
+                hexValue: '0x' + cr.toString(16).toUpperCase().padStart(3, '0'),
+                type: 'out_of_range',
+                typeLabel: '越界',
+                lineNumber: region.lineNumber,
+                index: errors.value.length + localErrors.length
+              })
+            }
+
+            // Check Y1
+            totalY++; totalSamp++
+            const y1Check = checkRange(y1, 'Y')
+            if (y1Check.outOfRange) {
+              rangeErrCount++
+              localErrors.push({
+                byteOffset: Math.round(baseByteOffset + (i + 3) * 1.25),
+                sampleIndex: sampleBaseIndex + 3,
+                channel: 'Y',
+                decValue: y1,
+                hexValue: '0x' + y1.toString(16).toUpperCase().padStart(3, '0'),
+                type: 'out_of_range',
+                typeLabel: '越界',
+                lineNumber: region.lineNumber,
+                index: errors.value.length + localErrors.length
+              })
+            }
+            lineY.push(y1)
+            lineCb.push(cb)
+            lineCr.push(cr)
+          }
+
+          // Staircase analysis on this line's Y values
+          if (lineY.length >= 16) {
+            const stairResult = analyzeStaircase(lineY, config.tolerance, lineWidth)
+            if (stairResult) {
+              // Add staircase errors
+              for (const pe of stairResult.pointErrors) {
+                stairErrCount++
+                const yVal = lineY[pe.indexInLine]
+                const sampleIdxInRegion = pe.indexInLine
+                const globalSampleIdx = totalSamp - lineY.length + sampleIdxInRegion
+                localErrors.push({
+                  byteOffset: Math.round(baseByteOffset + (sampleIdxInRegion * 2 + 1) * 1.25),
+                  sampleIndex: globalSampleIdx,
+                  channel: 'Y',
+                  decValue: yVal,
+                  hexValue: '0x' + yVal.toString(16).toUpperCase().padStart(3, '0'),
+                  type: 'staircase',
+                  typeLabel: '非标准位阶',
+                  lineNumber: region.lineNumber,
+                  index: errors.value.length + localErrors.length
+                })
+              }
+              // Also add bar-level errors
+              if (stairResult.hasAnyError) {
+                for (let bi = 0; bi < stairResult.bars.length; bi++) {
+                  const bar = stairResult.bars[bi]
+                  if (bar.isError) {
+                    // Find a representative sample in this bar
+                    const stepSize = Math.floor(lineY.length / 8)
+                    const repIdx = Math.min(bi * stepSize + Math.floor(stepSize / 2), lineY.length - 1)
+                    const repY = lineY[repIdx]
+                    stairErrCount++
+                    localErrors.push({
+                      byteOffset: Math.round(baseByteOffset + (repIdx * 2 + 1) * 1.25),
+                      sampleIndex: totalSamp - lineY.length + repIdx,
+                      channel: 'Y',
+                      decValue: repY,
+                      hexValue: '0x' + repY.toString(16).toUpperCase().padStart(3, '0'),
+                      type: 'staircase',
+                      typeLabel: `阶梯异常(${bar.name})`,
+                      lineNumber: region.lineNumber,
+                      index: errors.value.length + localErrors.length
+                    })
+                  }
+                }
+              }
+              stairResults.value.push({
+                lineNumber: region.lineNumber,
+                ...stairResult
+              })
+            }
+          }
+
+          errors.value.push(...localErrors)
+        }
+
+        // Also analyze data outside regions (if any) for completeness
+        if (regions.length === 0) {
+          // No SAV/EAV found, treat entire stream as raw data
+          console.log('[BT.656] 未检测到 SAV/EAV，按原始流处理')
+          for (let i = 0; i + 3 < allSamples.length; i += 4) {
+            const channels = [
+              { val: allSamples[i], name: 'Cb' },
+              { val: allSamples[i+1], name: 'Y' },
+              { val: allSamples[i+2], name: 'Cr' },
+              { val: allSamples[i+3], name: 'Y' }
+            ]
+            for (let c = 0; c < channels.length; c++) {
+              const ch = channels[c]
+              totalSamp++
+              if (ch.name === 'Y') totalY++; else totalCbCr++
+              const chk = checkRange(ch.val, ch.name)
+              if (chk.outOfRange) {
+                rangeErrCount++
+                errors.value.push({
+                  byteOffset: Math.round(i * 1.25 + c * 1.25),
+                  sampleIndex: totalSamp - 1,
+                  channel: ch.name,
+                  decValue: ch.val,
+                  hexValue: '0x' + ch.val.toString(16).toUpperCase().padStart(3, '0'),
+                  type: 'out_of_range',
+                  typeLabel: '越界',
+                  lineNumber: -1,
+                  index: errors.value.length
+                })
+              }
+            }
+          }
+        }
+
+        // Update stats
+        stats.totalSamples = totalSamp
+        stats.totalY = totalY
+        stats.totalCbCr = totalCbCr
+        stats.totalErrors = rangeErrCount + stairErrCount
+        stats.rangeErrors = rangeErrCount
+        stats.staircaseErrors = stairErrCount
+        stats.validSamples = totalSamp - stats.totalErrors
+        stats.linesDetected = regions.length
+
+        analysisDone.value = true
+        activeTab.value = 'table'
+
+      } catch (err) {
+        console.error('[BT.656] 分析错误:', err)
+        alert('分析出错: ' + err.message)
+      }
+
+      analyzing.value = false
+    }
+
+    function byteClass(byteInfo) {
+      if (byteInfo.hasError) return 'error'
+      if (byteInfo.val === 0xFF) return 'sav-eav'
+      if (byteInfo.val === 0x00) return 'sav-eav'
+      return 'normal'
+    }
+
+    return {
+      fileInput, fileName, fileSize, rawFileData, hexText, isDragging,
+      config, analyzing, analysisDone, activeTab, currentPage,
+      filterType, filterChannel, hexDisplayBytes, selectedStairLine,
+      errors, samples, stats, stairResults,
+      hasData, errorRatePercent, errorRateColor,
+      filteredErrors, totalPages, paginatedErrors,
+      hexLines, currentStair,
+      formatSize, handleDrop, handleFileSelect, loadFile, clearFile,
+      startAnalysis, byteClass
+    }
+  }
+}).mount('#app')
+</script>
+</body>
+</html>

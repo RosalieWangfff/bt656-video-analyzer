@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BT.656 数字视频流异常数据检测工具</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="app-header">
+    <h1>BT.656 数字视频流异常数据检测工具</h1>
+    <p>基于 ITU-R BT.656 4:2:2 规范 · 10-bit 数据解析 · WFM8300 CSV/Excel 支持</p>
+    <div class="server-status" :class="{ connected: serverOk }">
+      <span class="status-dot"></span>
+      后端 {{ serverOk ? '已连接' : '未连接' }} ({{ apiUrl }})
+    </div>
+  </div>
+
+  <div v-if="analyzing" class="loading-overlay"><div class="spinner"></div></div>
+
+  <div class="main-grid">
+    <!-- Left Panel -->
+    <div class="left-panel">
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="panel-header">📁 数据输入</div>
+        <div class="panel-body">
+          <div class="input-mode-tabs">
+            <button :class="{active: inputMode==='stream'}" @click="inputMode='stream'">二进制流</button>
+            <button :class="{active: inputMode==='csv'}" @click="inputMode='csv'">CSV / Excel</button>
+          </div>
+
+          <template v-if="inputMode==='stream'">
+            <div
+              class="upload-zone"
+              :class="{ dragover: isDragging }"
+              @dragover.prevent="isDragging = true"
+              @dragleave="isDragging = false"
+              @drop.prevent="handleDrop"
+              @click="$refs.fileInput.click()"
+            >
+              <input ref="fileInput" type="file" accept=".bin,.raw,.dat,.hex,.txt" @change="handleFileSelect">
+              <div class="upload-icon">📂</div>
+              <p>点击或拖拽上传 .bin / .raw / .hex 文件 (最大500MB)</p>
+            </div>
+            <div v-if="fileName" class="file-info">
+              <span class="fname">{{ fileName }}</span>
+              <span class="fsize">{{ formatSize(fileSize) }}</span>
+              <button class="btn-remove" @click="clearFile" title="移除文件">✕</button>
+            </div>
+            <label style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;display:block;font-weight:500;">
+              或粘贴十六进制数据
+            </label>
+            <textarea v-model="hexText" class="hex-input" placeholder="示例: FF 00 00 XX FF 00 00 XX ..." spellcheck="false"></textarea>
+          </template>
+
+          <template v-if="inputMode==='csv'">
+            <div
+              class="upload-zone csv-upload"
+              :class="{ dragover: isDragging }"
+              @dragover.prevent="isDragging = true"
+              @dragleave="isDragging = false"
+              @drop.prevent="handleCSVDrop"
+              @click="$refs.csvInput.click()"
+            >
+              <input ref="csvInput" type="file" accept=".csv,.xlsx,.xls" @change="handleCSVSelect">
+              <div class="upload-icon">📊</div>
+              <p>点击或拖拽上传 CSV / Excel 文件<br><span style="font-size:11px;color:var(--text-muted);">支持 WFM8300 导出格式</span></p>
+            </div>
+            <div v-if="csvFileName" class="file-info">
+              <span class="fname">{{ csvFileName }}</span>
+              <span class="fsize">{{ formatSize(csvFileSize) }}</span>
+              <button class="btn-remove" @click="clearCSVFile" title="移除文件">✕</button>
+            </div>
+            <div v-if="csvFormat" class="format-badge" :class="csvFormat">
+              {{ csvFormat === 'wfm8300' ? 'WFM8300 格式' : '通用 CSV 格式' }}
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="panel-header">⚙️ 解析配置</div>
+        <div class="panel-body">
+          <template v-if="inputMode==='stream'">
+            <div class="config-group">
+              <label>视频分辨率 / 行宽 (Y样点数)</label>
+              <select v-model.number="config.width">
+                <option :value="1920">1920 (1080p/i)</option>
+                <option :value="1440">1440 (1080i 3/4 HD)</option>
+                <option :value="1280">1280 (720p)</option>
+                <option :value="720">720 (SD 480i/576i)</option>
+                <option :value="0">自动检测</option>
+              </select>
+            </div>
+            <div class="config-group">
+              <label>起始序号偏移 (Initial Offset)</label>
+              <input type="number" v-model.number="config.initialOffset" min="0" placeholder="默认=0, 例: 1437">
+            </div>
+            <div class="config-group">
+              <label>SMPTE 阶梯误差容限 (LSB)</label>
+              <input type="number" v-model.number="config.tolerance" min="1" max="20">
+            </div>
+            <div class="config-group">
+              <label>数据打包模式</label>
+              <select v-model="config.packMode">
+                <option value="packed_4to5">Packed 4:2:2 (4样本→5字节)</option>
+                <option value="raw_10bit">Raw 10-bit (每样本2字节)</option>
+              </select>
+            </div>
+          </template>
+
+          <template v-if="inputMode==='csv'">
+            <div class="config-group">
+              <label>视频分辨率 / 行宽 (Y样点数)</label>
+              <select v-model.number="config.width">
+                <option :value="1920">1920 (1080p/i)</option>
+                <option :value="1440">1440 (1080i 3/4 HD)</option>
+                <option :value="1280">1280 (720p)</option>
+                <option :value="720">720 (SD 480i/576i)</option>
+                <option :value="0">自动检测</option>
+              </select>
+            </div>
+            <div class="config-group">
+              <label>数据显示进制</label>
+              <select v-model="csvDisplayBase">
+                <option value="hex">十六进制</option>
+                <option value="dec">十进制</option>
+                <option value="bin">二进制</option>
+              </select>
+            </div>
+            <div class="config-group">
+              <label>每页显示行数</label>
+              <select v-model.number="csvPageSize">
+                <option :value="10">10 行</option>
+                <option :value="20">20 行</option>
+                <option :value="50">50 行</option>
+                <option :value="100">100 行</option>
+              </select>
+            </div>
+            <div class="config-group">
+              <label>错误筛选</label>
+              <select v-model="csvErrorFilter">
+                <option value="all">显示全部</option>
+                <option value="errors">仅显示错误行</option>
+                <option value="out_of_range">越界错误</option>
+              </select>
+            </div>
+            <div class="config-group" v-if="excelSheetNames.length > 1">
+              <label>Excel 工作表</label>
+              <select v-model="selectedSheetName">
+                <option v-for="sn in excelSheetNames" :key="sn" :value="sn">{{ sn }}</option>
+              </select>
+            </div>
+          </template>
+
+          <button class="btn-analyze" @click="startAnalysis" :disabled="!hasData || analyzing || !serverOk">
+            {{ analyzing ? '分析中...' : '🔍 开始分析' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">📋 合法范围速查</div>
+        <div class="panel-body" style="font-size:12px;line-height:2;">
+          <div><strong style="color:var(--accent-green)">Y (亮度):</strong> 040h ~ 3BFh (64~959)</div>
+          <div><strong style="color:var(--accent-cyan)">Cb/Cr (色度):</strong> 040h ~ 3C0h (64~960)</div>
+          <div style="color:var(--text-muted);margin-top:8px;padding-top:8px;border-top:1px solid var(--border-color);">
+            定时基准: <span style="color:var(--accent-blue)">000h</span> / <span style="color:var(--accent-blue)">3FFh</span> (合法信号)
+          </div>
+          <div style="color:var(--text-muted);margin-top:4px;">
+            越界值: <span style="color:var(--accent-orange)">040h以下</span> 或 <span style="color:var(--accent-orange)">3BFh/3C0h以上</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel -->
+    <div class="right-panel">
+
+      <!-- ===== CSV/Excel Analysis View ===== -->
+      <template v-if="inputMode==='csv' && csvAnalysisDone">
+        <div class="panel" style="margin-bottom:16px;">
+          <div class="panel-header">📊 CSV/Excel 数据总览</div>
+          <div class="panel-body">
+            <!-- WFM8300 Header Info (Collapsible) -->
+            <div v-if="csvHeader.videoFormat || Object.keys(csvEvents).length > 0" class="wfm-header-section">
+              <div class="wfm-header-toggle" @click="showWfmHeader = !showWfmHeader">
+                <span class="wfm-toggle-icon">{{ showWfmHeader ? '▼' : '▶' }}</span>
+                <span class="wfm-toggle-title">WFM8300 文件信息</span>
+                <span class="wfm-toggle-summary" v-if="csvHeader.videoFormat">{{ csvHeader.videoFormat }}</span>
+              </div>
+              <div v-show="showWfmHeader" class="wfm-header-content">
+                <div class="wfm-info-grid" v-if="Object.keys(csvHeader).length > 0">
+                  <div class="wfm-info-item" v-if="csvHeader.headerVersion">
+                    <span class="wfm-info-label">Header Version</span>
+                    <span class="wfm-info-value">{{ csvHeader.headerVersion }}</span>
+                  </div>
+                  <div class="wfm-info-item" v-if="csvHeader.capturedTime">
+                    <span class="wfm-info-label">采集时间</span>
+                    <span class="wfm-info-value">{{ csvHeader.capturedTime }}</span>
+                  </div>
+                  <div class="wfm-info-item" v-if="csvHeader.frameCount">
+                    <span class="wfm-info-label">帧计数</span>
+                    <span class="wfm-info-value">{{ csvHeader.frameCount }}</span>
+                  </div>
+                  <div class="wfm-info-item" v-if="csvHeader.videoFormat">
+                    <span class="wfm-info-label">视频格式</span>
+                    <span class="wfm-info-value highlight">{{ csvHeader.videoFormat }}</span>
+                  </div>
+                  <div class="wfm-info-item" v-if="csvHeader.totalLines">
+                    <span class="wfm-info-label">总行数</span>
+                    <span class="wfm-info-value">{{ csvHeader.totalLines }}</span>
+                  </div>
+                  <div class="wfm-info-item" v-if="csvHeader.activeLines">
+                    <span class="wfm-info-label">有效行数</span>
+                    <span class="wfm-info-value">{{ csvHeader.activeLines }}</span>
+                  </div>
+                  <div class="wfm-info-item" v-if="csvHeader.totalLumaSamples">
+                    <span class="wfm-info-label">总Y样点/行</span>
+                    <span class="wfm-info-value">{{ csvHeader.totalLumaSamples }}</span>
+                  </div>
+                  <div class="wfm-info-item" v-if="csvHeader.activeLumaSamples">
+                    <span class="wfm-info-label">有效Y样点/行</span>
+                    <span class="wfm-info-value">{{ csvHeader.activeLumaSamples }}</span>
+                  </div>
+                </div>
+                <div class="wfm-events-section" v-if="Object.keys(csvEvents).length > 0">
+                  <div class="wfm-events-title">Events at Trigger</div>
+                  <div class="wfm-events-grid">
+                    <div class="wfm-event-item" v-for="(val, key) in csvEvents" :key="key" :class="{'has-error': val > 0}">
+                      <span class="wfm-event-name">{{ key }}</span>
+                      <span class="wfm-event-val" :style="{color: val > 0 ? '#ff6b6b' : 'var(--accent-green)'}">{{ val }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="csv-meta" v-if="csvHeader.videoFormat && !showWfmHeader">
+              <span class="meta-tag">{{ csvHeader.videoFormat }}</span>
+              <span class="meta-tag" v-if="csvHeader.totalLines">总行: {{ csvHeader.totalLines }}</span>
+              <span class="meta-tag" v-if="csvHeader.activeLines">有效行: {{ csvHeader.activeLines }}</span>
+              <span class="meta-tag" v-if="csvHeader.activeLumaSamples">Y样点/行: {{ csvHeader.activeLumaSamples }}</span>
+              <span class="meta-tag" v-if="csvHeader.capturedTime">采集: {{ csvHeader.capturedTime }}</span>
+            </div>
+            <div class="stats-grid">
+              <div class="stat-card y-val"><div class="stat-value">{{ csvStats.totalY.toLocaleString() }}</div><div class="stat-label">Y 样点</div></div>
+              <div class="stat-card cbcr-val"><div class="stat-value">{{ csvStats.totalCbCr.toLocaleString() }}</div><div class="stat-label">Cb/Cr 样点</div></div>
+              <div class="stat-card err-val"><div class="stat-value">{{ csvStats.totalErrors }}</div><div class="stat-label">异常数据</div></div>
+            </div>
+            <div class="stats-row">
+              <div class="mini-stat"><div class="ms-val" style="color:var(--accent-blue)">{{ csvStats.totalSamples.toLocaleString() }}</div><div class="ms-lbl">总样点</div></div>
+              <div class="mini-stat"><div class="ms-val" style="color:var(--accent-orange)">{{ csvStats.totalDataRows }}</div><div class="ms-lbl">数据行</div></div>
+              <div class="mini-stat"><div class="ms-val" style="color:#ffa500">{{ csvStats.rangeErrors }}</div><div class="ms-lbl">越界</div></div>
+              <div class="mini-stat"><div class="ms-val" style="color:#ffd700">{{ csvStats.staircaseErrors }}</div><div class="ms-lbl">阶梯</div></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px;">
+              <div style="flex:1;background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+                <div style="font-size:18px;font-weight:700;font-family:var(--hex-font);" :style="{color: csvErrorRateColor}">{{ csvErrorRatePercent }}%</div>
+                <div style="font-size:10px;color:var(--text-muted);">异常比例</div>
+              </div>
+              <div style="flex:1;background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+                <div style="font-size:18px;font-weight:700;font-family:var(--hex-font);color:var(--accent-green)">{{ csvStats.validSamples.toLocaleString() }}</div>
+                <div style="font-size:10px;color:var(--text-muted);">正常样点</div>
+              </div>
+            </div>
+
+            <!-- Error Alert Banner -->
+            <div v-if="csvStats.totalErrors > 0" class="error-alert-banner">
+              <div class="alert-icon">⚠️</div>
+              <div class="alert-content">
+                <strong>检测到 {{ csvStats.totalErrors }} 个异常数据！</strong>
+                <div class="alert-detail">
+                  <span v-if="csvStats.rangeErrors > 0" class="alert-item alert-range">越界 {{ csvStats.rangeErrors }} 个</span>
+                  <span v-if="csvStats.staircaseErrors > 0" class="alert-item alert-staircase">阶梯 {{ csvStats.staircaseErrors }} 个</span>
+                </div>
+              </div>
+              <button class="alert-action" @click="csvTab='errors'">查看详情 →</button>
+            </div>
+            <div v-else class="success-banner">
+              <div class="alert-icon">✅</div>
+              <div class="alert-content"><strong>所有数据均在合法范围内，未检测到异常！</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="tabs">
+            <button class="tab-btn" :class="{active: csvTab==='browse'}" @click="csvTab='browse'">📋 数据浏览</button>
+            <button class="tab-btn" :class="{active: csvTab==='rowDetail'}" @click="csvTab='rowDetail'">🔎 选行分析</button>
+            <button class="tab-btn" :class="{active: csvTab==='errors'}" @click="csvTab='errors'">⚠️ 错误详情</button>
+            <button class="tab-btn" :class="{active: csvTab==='lineStats'}" @click="csvTab='lineStats'">📈 行统计</button>
+          </div>
+          <div class="panel-body" style="padding:0;">
+
+            <!-- Data Browse Tab -->
+            <div v-show="csvTab === 'browse'" style="padding:16px;">
+              <div class="browse-toolbar">
+                <div class="browse-nav">
+                  <button @click="csvPage=1" :disabled="csvPage<=1">⏮</button>
+                  <button @click="csvPage--" :disabled="csvPage<=1">◀</button>
+                  <span style="font-size:12px;color:var(--text-secondary);">第 {{ csvPage }} / {{ csvTotalPages }} 页</span>
+                  <button @click="csvPage++" :disabled="csvPage>=csvTotalPages">▶</button>
+                  <button @click="csvPage=csvTotalPages" :disabled="csvPage>=csvTotalPages">⏭</button>
+                </div>
+                <div class="browse-search">
+                  <input type="text" v-model="csvSearchQuery" placeholder="搜索行号或值..." class="search-input" @keyup.enter="csvSearchGo">
+                  <button class="search-btn" @click="csvSearchGo">🔍</button>
+                </div>
+                <div class="browse-legend">
+                  <span class="legend-item" style="background:rgba(88,166,255,0.15);color:var(--accent-blue);">定时基准</span>
+                  <span class="legend-item out-of-range">越界</span>
+                  <span class="legend-item normal">正常</span>
+                </div>
+                <button class="btn-export" @click="exportCSVData" title="导出当前视图数据">💾 导出CSV</button>
+                <button class="btn-export" @click="exportFullReport" title="导出完整分析报告" style="margin-left:4px;">📄 完整报告</button>
+              </div>
+
+              <div class="csv-data-table-wrap">
+                <table class="csv-data-table">
+                  <thead>
+                    <tr>
+                      <th class="th-line">行号</th>
+                      <th class="th-samp">行/样点</th>
+                      <th v-for="(s, si) in csvPageData[0]?.samples.slice(0, csvVisibleCols)" :key="si"
+                        class="th-sample" :class="'th-' + s.channel.toLowerCase()">
+                        {{ s.channel }}+{{ s.sampleOffset }}
+                      </th>
+                      <th v-if="csvPageData[0] && csvPageData[0].samples.length > csvVisibleCols" class="th-more">
+                        +{{ csvPageData[0].samples.length - csvVisibleCols }}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, ri) in csvPageData" :key="ri"
+                      :class="{ 'row-has-error': rowHasError(row), 'row-selected': selectedRow && selectedRow.lineCount === row.lineCount && selectedRow.lineSamp === row.lineSamp }"
+                      @click="selectRow(row)">
+                      <td class="td-line">{{ row.lineCount }}</td>
+                      <td class="td-samp">{{ row.lineSamp }}</td>
+                      <td v-for="(s, si) in row.samples.slice(0, csvVisibleCols)" :key="si"
+                        class="td-sample"
+                        :class="sampleClass(s)"
+                        :title="sampleTooltip(s)">
+                        {{ formatSampleValue(s) }}
+                      </td>
+                      <td v-if="row.samples.length > csvVisibleCols" class="td-more">...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Row Detail Tab -->
+            <div v-show="csvTab === 'rowDetail'" style="padding:16px;">
+              <div v-if="!selectedRow" class="empty-state" style="padding:40px;">
+                <div class="icon">👆</div>
+                <p>请在「数据浏览」中点击一行数据查看详情</p>
+                <div class="row-jump" style="margin-top:16px;">
+                  <label style="font-size:12px;color:var(--text-secondary);">或直接跳转到行号：</label>
+                  <input type="number" v-model.number="jumpToLine" min="1" placeholder="输入行号" style="width:100px;">
+                  <button class="btn-small" @click="jumpToRow">跳转</button>
+                </div>
+              </div>
+              <div v-else>
+                <div class="row-detail-header">
+                  <div style="display:flex;align-items:center;gap:12px;">
+                    <h3>电视行 #{{ selectedRow.lineCount }}</h3>
+                    <span class="tv-line-badge" :class="{ 'tv-active': !rowIsBlanking(selectedRow), 'tv-blank': rowIsBlanking(selectedRow) }">
+                      {{ rowIsBlanking(selectedRow) ? '场消隐' : '有效视频' }}
+                    </span>
+                    <span class="tv-line-badge tv-field">{{ rowFieldInfo(selectedRow) }}</span>
+                  </div>
+                  <div class="row-detail-stats">
+                    <span style="color:var(--text-muted);">样点范围: {{ selectedRow.lineSamp }}</span>
+                    <span>总样点: {{ selectedRow.samples.length }}</span>
+                    <span style="color:#ffa500">越界: {{ rowErrorCount(selectedRow, 'out_of_range') }}</span>
+                    <span style="color:#ffd700">阶梯: {{ rowErrorCount(selectedRow, 'staircase') }}</span>
+                  </div>
+                  <div class="row-detail-nav">
+                    <button class="btn-small" @click="navigateRow(-1)" :disabled="!canNavigateRow(-1)">◀ 上一行</button>
+                    <button class="btn-small" @click="navigateRow(1)" :disabled="!canNavigateRow(1)">下一行 ▶</button>
+                  </div>
+                </div>
+
+                <div class="row-detail-toolbar">
+                  <label style="font-size:12px;color:var(--text-secondary);">显示进制:</label>
+                  <select v-model="csvDisplayBase" style="width:auto;min-width:120px;">
+                    <option value="hex">十六进制</option>
+                    <option value="dec">十进制</option>
+                    <option value="bin">二进制</option>
+                  </select>
+                  <label style="font-size:12px;color:var(--text-secondary);margin-left:16px;">通道筛选:</label>
+                  <select v-model="rowDetailChannel" style="width:auto;min-width:100px;">
+                    <option value="all">全部</option>
+                    <option value="Y">Y (亮度)</option>
+                    <option value="Cb">Cb (蓝色差)</option>
+                    <option value="Cr">Cr (红色差)</option>
+                  </select>
+                  <button class="btn-export" @click="exportRowDetail" style="margin-left:auto;">💾 导出此行</button>
+                </div>
+
+                <div class="wfm-sample-table-wrap">
+                  <table class="wfm-sample-table">
+                    <thead>
+                      <tr>
+                        <th class="wfm-th-idx">#</th>
+                        <th class="wfm-th-ch">通道</th>
+                        <th class="wfm-th-val">十六进制</th>
+                        <th class="wfm-th-val">十进制</th>
+                        <th class="wfm-th-val">二进制</th>
+                        <th class="wfm-th-status">状态</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(s, si) in filteredRowSamples" :key="si"
+                        :class="wfmRowClass(s)">
+                        <td class="wfm-td-idx">{{ s.sampleOffset }}</td>
+                        <td class="wfm-td-ch" :class="'ch-' + s.channel.toLowerCase()">{{ s.channel }}</td>
+                        <td class="wfm-td-val">{{ s.hexValue }}</td>
+                        <td class="wfm-td-val">{{ s.decValue }}</td>
+                        <td class="wfm-td-val" style="font-size:10px;">{{ s.binValue }}</td>
+                        <td class="wfm-td-status">
+                          <span v-if="s.decValue===0 || s.decValue===0x3FF" class="wfm-status-sav">定时基准</span>
+                          <span v-else-if="s.errorInfo.hasError" class="wfm-status-err">{{ s.errorInfo.reason }}</span>
+                          <span v-else class="wfm-status-ok">正常</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="row-stats-summary">
+                  <h4 style="font-size:13px;margin-bottom:8px;color:var(--text-secondary);">📊 行内统计</h4>
+                  <div class="row-stats-grid">
+                    <div class="rs-item">
+                      <span class="rs-label">Y 均值</span>
+                      <span class="rs-value" style="color:var(--accent-green)">{{ rowChannelStats.Y.mean }}</span>
+                    </div>
+                    <div class="rs-item">
+                      <span class="rs-label">Y 最小</span>
+                      <span class="rs-value" style="color:var(--accent-green)">{{ rowChannelStats.Y.min }}</span>
+                    </div>
+                    <div class="rs-item">
+                      <span class="rs-label">Y 最大</span>
+                      <span class="rs-value" style="color:var(--accent-green)">{{ rowChannelStats.Y.max }}</span>
+                    </div>
+                    <div class="rs-item">
+                      <span class="rs-label">Cb 均值</span>
+                      <span class="rs-value" style="color:var(--accent-cyan)">{{ rowChannelStats.Cb.mean }}</span>
+                    </div>
+                    <div class="rs-item">
+                      <span class="rs-label">Cr 均值</span>
+                      <span class="rs-value" style="color:var(--accent-purple)">{{ rowChannelStats.Cr.mean }}</span>
+                    </div>
+                    <div class="rs-item">
+                      <span class="rs-label">异常率</span>
+                      <span class="rs-value" :style="{color: rowErrorRate > 0 ? '#ff6b6b' : 'var(--accent-green)'}">{{ rowErrorRate }}%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="row-waveform">
+                  <h4 style="font-size:13px;margin-bottom:8px;color:var(--text-secondary);">Y 通道波形</h4>
+                  <div class="waveform-container">
+                    <svg :width="waveformWidth" :height="120" class="waveform-svg">
+                      <line v-for="gy in [0,30,60,90,120]" :key="'g'+gy" x1="0" :y1="gy" :x2="waveformWidth" :y2="gy" stroke="#30363d" stroke-width="0.5"/>
+                      <line :x1="0" :y1="120 - (64/1024)*120" :x2="waveformWidth" :y2="120 - (64/1024)*120" stroke="rgba(255,140,0,0.3)" stroke-width="1" stroke-dasharray="4,4"/>
+                      <line :x1="0" :y1="120 - (959/1024)*120" :x2="waveformWidth" :y2="120 - (959/1024)*120" stroke="rgba(255,140,0,0.3)" stroke-width="1" stroke-dasharray="4,4"/>
+                      <polyline :points="yWaveformPoints" fill="none" stroke="#3fb950" stroke-width="1.5"/>
+                    </svg>
+                  </div>
+                  <h4 style="font-size:13px;margin:12px 0 8px;color:var(--text-secondary);">Cb/Cr 通道波形</h4>
+                  <div class="waveform-container">
+                    <svg :width="waveformWidth" :height="120" class="waveform-svg">
+                      <line v-for="gy in [0,30,60,90,120]" :key="'g2'+gy" x1="0" :y1="gy" :x2="waveformWidth" :y2="gy" stroke="#30363d" stroke-width="0.5"/>
+                      <line :x1="0" :y1="120 - (64/1024)*120" :x2="waveformWidth" :y2="120 - (64/1024)*120" stroke="rgba(255,140,0,0.3)" stroke-width="1" stroke-dasharray="4,4"/>
+                      <line :x1="0" :y1="120 - (960/1024)*120" :x2="waveformWidth" :y2="120 - (960/1024)*120" stroke="rgba(255,140,0,0.3)" stroke-width="1" stroke-dasharray="4,4"/>
+                      <polyline :points="cbWaveformPoints" fill="none" stroke="#39c5cf" stroke-width="1.2"/>
+                      <polyline :points="crWaveformPoints" fill="none" stroke="#bc8cff" stroke-width="1.2"/>
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Errors Tab -->
+            <div v-show="csvTab === 'errors'">
+              <div class="filter-bar" style="padding:12px 16px 0;">
+                <select v-model="csvErrorFilter">
+                  <option value="all">全部错误</option>
+                  <option value="out_of_range">越界错误</option>
+                  <option value="staircase">阶梯错误</option>
+                </select>
+                <select v-model="csvErrorChannelFilter">
+                  <option value="all">全部通道</option>
+                  <option value="Y">Y</option>
+                  <option value="Cb">Cb</option>
+                  <option value="Cr">Cr</option>
+                </select>
+                <span class="result-count">显示 {{ filteredCSVErrors.length }} 条</span>
+                <button class="btn-export" @click="exportErrors" style="margin-left:auto;">💾 导出错误</button>
+              </div>
+
+              <!-- Error Distribution Mini Chart -->
+              <div v-if="filteredCSVErrors.length > 0" class="error-distribution" style="padding:12px 16px;">
+                <div class="dist-title">错误类型分布</div>
+                <div class="dist-bar-container">
+                  <div class="dist-bar dist-bar-range" :style="{width: errorDistPercent.range + '%'}" v-if="csvStats.rangeErrors > 0">
+                    <span class="dist-label" v-if="errorDistPercent.range > 8">{{ csvStats.rangeErrors }}</span>
+                  </div>
+                  <div class="dist-bar dist-bar-staircase" :style="{width: errorDistPercent.staircase + '%'}" v-if="csvStats.staircaseErrors > 0">
+                    <span class="dist-label" v-if="errorDistPercent.staircase > 8">{{ csvStats.staircaseErrors }}</span>
+                  </div>
+                </div>
+                <div class="dist-legend">
+                  <span class="dl-item"><span class="dl-dot" style="background:#ffa500"></span>越界 {{ csvStats.rangeErrors }}</span>
+                  <span class="dl-item"><span class="dl-dot" style="background:#ffd700"></span>阶梯 {{ csvStats.staircaseErrors }}</span>
+                </div>
+              </div>
+
+              <div class="table-wrap" style="max-height:500px;">
+                <table v-if="filteredCSVErrors.length" class="data-table">
+                  <thead>
+                    <tr><th>序号</th><th>行号</th><th>行/样点</th><th>通道</th><th>十六进制</th><th>十进制</th><th>二进制</th><th>错误类型</th><th>操作</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(err, idx) in paginatedCSVErrors" :key="idx">
+                      <td>{{ err.index + 1 }}</td>
+                      <td>{{ err.lineCount }}</td>
+                      <td>{{ err.lineSamp }}</td>
+                      <td><span :class="'ch-' + err.channel.toLowerCase()">{{ err.channel }}</span></td>
+                      <td style="font-weight:600;" :style="{
+                        color: err.errorType==='out_of_range' ? '#ffa500' : '#ffd700'
+                      }">{{ err.hexValue }}</td>
+                      <td>{{ err.decValue }}</td>
+                      <td style="font-size:10px;">{{ err.binValue }}</td>
+                      <td><span :class="'err-type-badge err-' + err.errorType">{{ err.errorReason }}</span></td>
+                      <td><button class="btn-small" @click="jumpToErrorRow(err)">定位</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-else class="empty-state"><div class="icon">✅</div><p>无匹配错误</p></div>
+              </div>
+              <div v-if="csvErrorTotalPages > 1" style="padding:12px;display:flex;justify-content:center;gap:4px;flex-wrap:wrap;">
+                <button v-for="p in Math.min(csvErrorTotalPages, 20)" :key="p" @click="csvErrorPage = p"
+                  class="page-btn" :class="{active: csvErrorPage === p}">{{ p }}</button>
+                <span v-if="csvErrorTotalPages > 20" style="color:var(--text-muted);font-size:12px;align-self:center;">... / {{ csvErrorTotalPages }}</span>
+              </div>
+            </div>
+
+            <!-- Line Stats Tab -->
+            <div v-show="csvTab === 'lineStats'" style="padding:16px;">
+              <div class="line-stats-header">
+                <h4 style="font-size:14px;color:var(--text-secondary);">📈 各行错误分布统计</h4>
+                <button class="btn-export" @click="exportLineStats">💾 导出统计</button>
+              </div>
+
+              <div class="line-stats-chart">
+                <div v-for="(ls, li) in csvLineStats" :key="li"
+                  class="ls-bar-group"
+                  @click="selectRowByLineIndex(li)"
+                  :title="'行' + ls.lineCount + ': 越界' + ls.rangeErrors">
+                  <div class="ls-bar ls-bar-range" :style="{height: lineStatsBarHeight(ls.rangeErrors) + 'px'}" v-if="ls.rangeErrors > 0"></div>
+                  <div class="ls-bar-label">{{ ls.lineCount }}</div>
+                </div>
+              </div>
+
+              <div class="line-stats-table-wrap">
+                <table class="data-table" style="font-size:11px;">
+                  <thead>
+                    <tr><th>行号</th><th>行/样点</th><th>总样点</th><th>Y</th><th>Cb/Cr</th><th style="color:#ffa500">越界</th><th style="color:#ffd700">阶梯</th><th>总错误</th><th>操作</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(ls, li) in csvLineStats" :key="li" :class="{'row-has-error': ls.hasError}" @click="selectRowByLineIndex(li)" style="cursor:pointer;">
+                      <td>{{ ls.lineCount }}</td>
+                      <td>{{ ls.lineSamp }}</td>
+                      <td>{{ ls.totalSamples }}</td>
+                      <td>{{ ls.yCount }}</td>
+                      <td>{{ ls.cbCrCount }}</td>
+                      <td :style="{color: ls.rangeErrors > 0 ? '#ffa500' : '', fontWeight: ls.rangeErrors > 0 ? '700' : ''}">{{ ls.rangeErrors }}</td>
+                      <td :style="{color: ls.staircaseErrors > 0 ? '#ffd700' : '', fontWeight: ls.staircaseErrors > 0 ? '700' : ''}">{{ ls.staircaseErrors }}</td>
+                      <td :style="{color: ls.totalErrors > 0 ? 'var(--accent-red)' : 'var(--accent-green)', fontWeight: '700'}">{{ ls.totalErrors }}</td>
+                      <td><button class="btn-small">详情</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </template>
+
+      <!-- ===== Stream Analysis View ===== -->
+      <template v-if="inputMode==='stream' && analysisDone">
+        <div class="panel" style="margin-bottom:16px;">
+          <div class="panel-header">📊 分析结果总览</div>
+          <div class="panel-body">
+            <div class="stats-grid">
+              <div class="stat-card y-val"><div class="stat-value">{{ stats.totalY.toLocaleString() }}</div><div class="stat-label">Y 样点</div></div>
+              <div class="stat-card cbcr-val"><div class="stat-value">{{ stats.totalCbCr.toLocaleString() }}</div><div class="stat-label">Cb/Cr 样点</div></div>
+              <div class="stat-card err-val"><div class="stat-value">{{ stats.totalErrors }}</div><div class="stat-label">异常数据</div></div>
+            </div>
+            <div class="stats-row">
+              <div class="mini-stat"><div class="ms-val" style="color:var(--accent-blue)">{{ stats.totalSamples.toLocaleString() }}</div><div class="ms-lbl">总样点</div></div>
+              <div class="mini-stat"><div class="ms-val" style="color:var(--accent-orange)">{{ stats.linesDetected }}</div><div class="ms-lbl">检测行</div></div>
+              <div class="mini-stat"><div class="ms-val" style="color:#ffa500">{{ stats.rangeErrors }}</div><div class="ms-lbl">越界</div></div>
+              <div class="mini-stat"><div class="ms-val" style="color:#ffd700">{{ stats.staircaseErrors }}</div><div class="ms-lbl">阶梯</div></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px;">
+              <div style="flex:1;background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+                <div style="font-size:18px;font-weight:700;font-family:var(--hex-font);" :style="{color: errorRateColor}">{{ errorRatePercent }}%</div>
+                <div style="font-size:10px;color:var(--text-muted);">异常比例</div>
+              </div>
+              <div style="flex:1;background:var(--bg-tertiary);border-radius:6px;padding:10px;text-align:center;">
+                <div style="font-size:18px;font-weight:700;font-family:var(--hex-font);color:var(--accent-green)">{{ stats.validSamples.toLocaleString() }}</div>
+                <div style="font-size:10px;color:var(--text-muted);">正常样点</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="tabs">
+            <button class="tab-btn" :class="{active: activeTab==='table'}" @click="activeTab='table'">📋 异常详情表</button>
+            <button class="tab-btn" :class="{active: activeTab==='hex'}" @click="activeTab='hex'">🔢 十六进制视图</button>
+            <button class="tab-btn" :class="{active: activeTab==='stair'}" @click="activeTab='stair'">📈 阶梯分析图</button>
+          </div>
+          <div class="panel-body" style="padding:0;">
+
+            <div v-show="activeTab === 'table'">
+              <div class="filter-bar" style="padding:12px 16px 0;">
+                <select v-model="filterType">
+                  <option value="all">全部类型</option>
+                  <option value="out_of_range">越界</option>
+                  <option value="staircase">阶梯错误</option>
+                </select>
+                <select v-model="filterChannel">
+                  <option value="all">全部通道</option>
+                  <option value="Y">Y</option>
+                  <option value="Cb">Cb</option>
+                  <option value="Cr">Cr</option>
+                </select>
+                <span class="result-count">显示 {{ filteredErrors.length }} / {{ errors.length }} 条</span>
+              </div>
+              <div class="table-wrap">
+                <table v-if="filteredErrors.length" class="data-table">
+                  <thead>
+                    <tr><th>序号</th><th>文件偏移</th><th>样点序号</th><th>通道</th><th>数值(十六进制)</th><th>数值(十进制)</th><th>行号</th><th>错误类型</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(err, idx) in paginatedErrors" :key="idx">
+                      <td>{{ err.index + 1 }}</td>
+                      <td>{{ err.byteOffset.toString(16).toUpperCase().padStart(6,'0') }}h</td>
+                      <td>{{ err.sampleIndex }}</td>
+                      <td><span :class="'ch-' + err.channel.toLowerCase()">{{ err.channel }}</span></td>
+                      <td style="font-weight:600;" :style="{
+                        color: err.type==='out_of_range' ? '#ffa500' : '#ffd700'
+                      }">{{ err.hexValue }}</td>
+                      <td>{{ err.decValue }}</td>
+                      <td>{{ err.lineNumber }}</td>
+                      <td><span :class="'err-type-badge err-' + err.type">{{ err.typeLabel }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-else class="empty-state"><div class="icon">✅</div><p>{{ filterType!=='all'||filterChannel!=='all' ? '当前筛选条件下无结果' : '未检测到异常数据' }}</p></div>
+              </div>
+              <div v-if="totalPages > 1" style="padding:12px;display:flex;justify-content:center;gap:8px;">
+                <button v-for="p in totalPages" :key="p" @click="currentPage = p"
+                  style="padding:4px 10px;border:1px solid var(--border-color);background:var(--bg-tertiary);color:var(--text-primary);cursor:pointer;border-radius:4px;font-size:12px;"
+                  :style="{background: currentPage===p ? 'var(--accent-blue)' : '', color: currentPage===p ? '#fff' : ''}"
+                >{{ p }}</button>
+              </div>
+            </div>
+
+            <div v-show="activeTab === 'hex'" style="padding:16px;">
+              <div class="filter-bar" style="margin-bottom:12px;">
+                <span style="font-size:12px;color:var(--text-muted);">显示前 {{ hexDisplayBytes }} 字节</span>
+                <input type="number" v-model.number="hexDisplayBytes" min="256" max="131072" step="256" style="width:100px;">
+              </div>
+              <div class="hex-editor">
+                <div v-for="(line, li) in hexLines" :key="li" class="hex-line">
+                  <span class="hex-offset">{{ line.offsetStr }}</span>
+                  <div class="hex-bytes">
+                    <span v-for="(byte, bi) in line.bytes" :key="bi" class="hex-byte" :class="byteClass(byte)">{{ byte.hex }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-show="activeTab === 'stair'" style="padding:16px;">
+              <div class="stair-section">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                  <span style="font-size:13px;font-weight:600;">SMPTE 彩条亮度(Y)阶梯分布</span>
+                  <select v-model.number="selectedStairLine" style="width:auto;min-width:140px;" v-if="stairResults.length">
+                    <option v-for="(sr, i) in stairResults" :key="i" :value="i">第 {{ sr.lineNumber }} 行</option>
+                  </select>
+                </div>
+                <div v-if="currentStair" class="stair-chart">
+                  <div v-for="(bar, bi) in currentStair.bars" :key="bi" class="stair-bar"
+                    :class="{ 'error-bar': bar.isError }"
+                    :style="{ height: bar.heightPx + 'px' }">
+                    <span class="bar-label">{{ bar.name }}</span>
+                    <span class="bar-value">{{ bar.meanHex }}</span>
+                  </div>
+                </div>
+                <div v-else class="empty-state" style="padding:30px;"><p>暂无阶梯数据</p></div>
+                <div v-if="currentStair" style="margin-top:40px;">
+                  <table class="data-table" style="font-size:11px;">
+                    <thead><tr><th>色块</th><th>参考值(10bit)</th><th>实测均值</th><th>偏差</th><th>标准差</th><th>状态</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(bar, bi) in currentStair.bars" :key="bi">
+                        <td><strong>{{ bar.name }}</strong></td>
+                        <td style="font-family:var(--hex-font);color:var(--text-secondary);">{{ bar.refHex }}</td>
+                        <td style="font-family:var(--hex-font);font-weight:600;">{{ bar.meanHex }}</td>
+                        <td style="font-family:var(--hex-font);" :style="{color: Math.abs(bar.deviation)<=config.tolerance ? 'var(--accent-green)' : 'var(--accent-red)'}">
+                          {{ bar.deviation >= 0 ? '+' : '' }}{{ bar.deviation }} LSB
+                        </td>
+                        <td style="font-family:var(--hex-font);">{{ bar.stdDev }}</td>
+                        <td>
+                          <span class="err-type-badge" :class="bar.isError ? 'err-staircase' : ''"
+                            :style="bar.isError ? '' : 'background:rgba(63,185,80,0.15);color:var(--accent-green);'">
+                            {{ bar.isError ? '❌ 异常' : '✅ 正常' }}
+                          </span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </template>
+
+      <!-- Empty State -->
+      <div v-if="(inputMode==='stream' && !analysisDone) || (inputMode==='csv' && !csvAnalysisDone)" class="panel">
+        <div class="panel-body">
+          <div class="empty-state">
+            <div class="icon">🔬</div>
+            <p>请上传文件后点击「开始分析」</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- WFM8300 风格电视行弹窗 -->
+    <div v-if="tvLineModalOpen" class="tv-line-modal" @click.self="closeTvLineModal">
+      <div class="tv-line-modal-content">
+        <div class="tv-line-modal-header">
+          <div class="tv-line-modal-title">
+            <h2>电视行 #{{ tvLineModalRow?.lineCount }}</h2>
+            <span class="tv-line-badge" :class="{ 'tv-active': !rowIsBlanking(tvLineModalRow), 'tv-blank': rowIsBlanking(tvLineModalRow) }">
+              {{ rowIsBlanking(tvLineModalRow) ? '场消隐' : '有效视频' }}
+            </span>
+            <span class="tv-line-badge tv-field">{{ rowFieldInfo(tvLineModalRow) }}</span>
+            <span style="color:var(--text-muted);font-size:12px;margin-left:12px;">{{ tvLineModalRow?.lineSamp }}</span>
+          </div>
+          <button class="tv-line-modal-close" @click="closeTvLineModal">关闭</button>
+        </div>
+
+        <div class="tv-line-modal-body">
+          <!-- 左侧面板: 样点数据列表 -->
+          <div class="tv-line-modal-left">
+            <div class="tv-panel-title">📋 样点数据列表</div>
+            <div class="tv-line-modal-table-wrap">
+              <table class="tv-line-modal-table channel-col-table">
+                <thead>
+                  <tr>
+                    <th class="ch-cb">Cb</th>
+                    <th class="ch-y">Y</th>
+                    <th class="ch-cr">Cr</th>
+                    <th class="ch-y2">Y</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(g, gi) in sampleGroups" :key="gi">
+                    <td v-for="(s, si) in g.samples" :key="si"
+                      :class="[wfmRowClass(s), 'td-' + (si===0?'cb':si===1?'y':si===2?'cr':'y2')]"
+                      :title="s ? (s.channel + ' | #' + s.sampleOffset + ' | Dec:' + s.decValue) : ''">
+                      <span v-if="s">{{ formatSampleValue(s) }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 右侧面板: 视频概览 -->
+          <div class="tv-line-modal-right">
+            <div class="tv-panel-title">📺 视频概览</div>
+
+            <div class="tv-stats-cards">
+              <div class="tv-stat-card">
+                <div class="tv-stat-val" style="color:var(--accent-green)">{{ tvLineModalRow?.samples?.filter(s=>s.channel==='Y').length || 0 }}</div>
+                <div class="tv-stat-lbl">Y 样点</div>
+              </div>
+              <div class="tv-stat-card">
+                <div class="tv-stat-val" style="color:var(--accent-cyan)">{{ tvLineModalRow?.samples?.filter(s=>s.channel==='Cb').length || 0 }}</div>
+                <div class="tv-stat-lbl">Cb 样点</div>
+              </div>
+              <div class="tv-stat-card">
+                <div class="tv-stat-val" style="color:var(--accent-purple)">{{ tvLineModalRow?.samples?.filter(s=>s.channel==='Cr').length || 0 }}</div>
+                <div class="tv-stat-lbl">Cr 样点</div>
+              </div>
+              <div class="tv-stat-card">
+                <div class="tv-stat-val" style="color:var(--accent-red)">{{ rowErrorCount(tvLineModalRow, 'out_of_range') + rowErrorCount(tvLineModalRow, 'staircase') }}</div>
+                <div class="tv-stat-lbl">异常</div>
+              </div>
+            </div>
+
+            <div class="tv-line-modal-toolbar">
+              <label>显示进制:</label>
+              <select v-model="csvDisplayBase">
+                <option value="hex">十六进制</option>
+                <option value="dec">十进制</option>
+                <option value="bin">二进制</option>
+              </select>
+              <button class="btn-export" @click="exportRowDetail">💾 导出此行</button>
+            </div>
+
+            <!-- Y 通道波形 -->
+            <div class="tv-waveform-section">
+              <div class="tv-waveform-title">Y 通道波形</div>
+              <div class="waveform-container">
+                <svg :width="waveformWidth" :height="120" class="waveform-svg">
+                  <line v-for="gy in [0,30,60,90,120]" :key="'g'+gy" x1="0" :y1="gy" :x2="waveformWidth" :y2="gy" stroke="#30363d" stroke-width="0.5"/>
+                  <line :x1="0" :y1="120 - (64/1024)*120" :x2="waveformWidth" :y2="120 - (64/1024)*120" stroke="rgba(255,140,0,0.3)" stroke-width="1" stroke-dasharray="4,4"/>
+                  <line :x1="0" :y1="120 - (959/1024)*120" :x2="waveformWidth" :y2="120 - (959/1024)*120" stroke="rgba(255,140,0,0.3)" stroke-width="1" stroke-dasharray="4,4"/>
+                  <polyline :points="yWaveformPoints" fill="none" stroke="#3fb950" stroke-width="1.5"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
